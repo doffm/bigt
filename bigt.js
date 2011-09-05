@@ -159,3 +159,52 @@ assert.deepEqual(root, {
         children: []
     }]
 });
+
+var clear = function() {
+    process.stdout.write("\033[1A");
+};
+
+var StringBuffer = function() {
+    this.buffer = [];
+};
+StringBuffer.prototype.write = function(s) {
+    this.buffer.push(s);
+};
+StringBuffer.prototype.toString = function() {
+    return this.buffer.join("");
+};
+
+var color = function(status) {
+    switch (status) {
+        case "running": return "33";
+        case "passed" : return "1;32";
+        case "failed" : return "1;31";
+        default       : return "31";
+    };
+};
+
+var lout = function(output, line, depth, color) {
+    output.write(Array(depth+1).join("\t") + "\033[2K\033[" + color + "m" + line + "\n\033[37m");
+};
+
+var render = function(output, node, depth) {
+    var lines = 1;
+    lout(output, node.name, depth, color(node.status));
+
+    if(node.status == "failed" && node.err)
+        node.err.msg.split(/\r\n|\r|\n/).forEach(function(l) {
+            lines += 1;
+            lout(output, l, depth+1, 37)
+        });
+    node.children.forEach(function(c) {
+        lines += render(output, c, depth+1)
+    });
+
+    return lines;
+};
+
+var sb = new StringBuffer();
+
+render(sb, root, 0);
+
+process.stdout.write(sb.toString());
