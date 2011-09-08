@@ -1,6 +1,10 @@
-var assert = require("assert");
+var sys     = require("sys");
+var assert  = require("assert");
+var timers  = require("timers");
+
+var EventEmitter = require("events").EventEmitter;
+
 var console = require("console");
-var events = require("events");
 
 var merge = function (dest, source) {
     for (var p in source) {
@@ -218,7 +222,7 @@ var render = function(output, node, depth) {
     if(node.status == "failed" && node.error) {
         node.error.stack.split(/\r\n|\r|\n/).forEach(function(l) {
             lines += 1;
-            lout(output, l, depth+1, 37)
+            lout(output, l, depth, 37)
         });
     }
     node.children.forEach(function(c) {
@@ -234,64 +238,162 @@ render(sb, root, 0);
 
 process.stdout.write(sb.toString());
 
-var Test = function (name, test) {
-    events.EventEmitter.call(this);
-
-    this.name = name;
-    this.test = test;
-    this.children = 0;
+var facade = function (dest, source, properties) {
+    properties.forEach(function (prop) {
+        if (source[prop]) {
+            dest[prop] = typeof source[prop] == "function" ? source[prop].bind(source) : source[prop];
+        };
+    });
 };
-Test.prototype = Object.create(events.EventEmitter.prototype, {
-    constructor: {
-        value: Test, 
-        enumerable: false,
-        writable: true,
-        configurable: true
-    }
-});
 
-Test.prototype.run = function() {
-    try {
-        this.emit("status", merge(new StatusSignal(), {
-            name: this.name
-        }));
-        this.test(this);
-        this.emit("status", merge(new StatusSignal(), {
-            name: this.name,
-            status: "passed",
-        }));
-    } catch (err) {
-        this.emit("status", merge(new StatusSignal(), {
-            name: this.name,
-            status: "failed",
-            error: err
-        }));
+var isEmpty = function (obj) {
+    var empty = true;
+    for (prop in obj) {
+        empty = false;
+        break;
     }
+    return empty;
+}
+
+// Logic behind signal emission.
+//
+// A test emits running when it is started.
+// A test emits failed if it explicitly fails either through
+// a 'fail' call or through an exception in the main function.
+// A test emits passed only when it has passed and all of its
+// children have passed.
+//
+// If it passes and one of its children fails then it fails.
+//
+// Running emitted when started.
+//
+// Failed emitted on exception or through explicit `fail` method.
+
+var Test = function (name, func) {
+    EventEmitter.call(this);
+
+    this.name    = name;
+    this.func    = func;
+    this.timeout = 0;
+};
+sys.inherits(Test, EventEmitter);
+
+Test.prototype.run = function () {
+    var innerTest = new InnerTest(this);
+    innerTest.run();
     return this;
 };
 
-Test.prototype.createChild = function(name, test) {
-    var self = this;
-    var child = new Test(name, test);
-    child.addListener("status", function(status) {
-        status.path.push(self.children);
-        self.emit("status", status);
-    });
-    self.children += 1;
+Test.prototype.async = function (timeout) {
+    this.timeout = timeout;
+    return this;
+};
+
+Test.prototype.skip = function () {
+    return this;
+};
+
+var InnerTest = function (test) {
+    this.test = test;
+    this.timeoutId = null;
+
+    this.result = false;
+    this.finished = false;
+
+    this.children = {};
+    this.childCounter = 0;
+};
+
+InnerTest.prototype.run = function () {
+    var timeout = this.test.timeout;
+    try {
+        if (timeout && timeout > 0) {
+            this.timeoutId = timers.setTimeout(function (self) {
+                self.fail(new Error("Timeout"));
+            }, timeout, this);
+        };
+        this.emit("status", {name:this.test.name, path: [], status: "running"});
+        // Run the actual test function
+        this.test.func(this);
+        if (!timeout) {
+            this.pass();
+        };
+    } catch (error) {
+        this.fail(error);
+    }
+};
+
+InnerTest.prototype.emit = function (name, obj) {
+    if (!this.finished) {
+        this.test.emit(name, obj);
+    }
+};
+
+InnerTest.prototype.finish = function () {
+    if (this.timeoutId) timers.clearTimeout(this.timeoutId);
+    this.emit("finished");
+    this.finished = true;
+};
+
+InnerTest.prototype.pass = function () {
+    this.result = true;
+    this.emit("status", {name: this.test.name, path: [], status: "passed"});
+    if (this.result && isEmpty(this.children))
+        this.finish();
+};
+
+InnerTest.prototype.fail = function (error) {
+    this.result = true;
+    this.emit("status", {name: this.test.name, path: [], status: "failed", error: error});
+    this.finish();
+};
+
+InnerTest.prototype.child = function (name, func) {
+    var child = new Test(name, func);
+    var childId = this.childCounter++;
+
+    this.children[childId] = child;
+        
+    child.addListener("status", (function(status) {
+        // Emit the childs status
+        status.path.push(childId);
+        this.emit("status", status);
+    }).bind(this));
+
+    child.addListener("finished", (function() {
+        delete this.children[childId];
+
+        if (this.result && isEmpty(this.children))
+            this.finish();
+    }).bind(this));
+
     return child;
 };
 
 var rootTest = new Test("Root Test", function(T) {
     assert.ok(true);
-    T.createChild("S1", function(T) {
+    T.child("S1", function(T) {
         assert.ok(true);
     }).run();
-    T.createChild("S2", function(T) {
+    T.child("S2", function(T) {
         assert.ok(true);
+        T.child("S21", function(T) {
+            assert.ok(true);
+        }).run();
     }).run();
-    T.createChild("S3", function(T) {
+    T.child("S3", function(T) {
         assert.ok(false);
     }).run();
+    T.child("S4", function(T) {
+        assert.ok(true);
+        T.pass();
+    }).async().run();
+    T.child("S5", function(T) {
+        T.fail(new Error("Foobar"));
+    }).run();
+    T.child("S6", function(T) {
+        assert.ok(true);
+    }).async(20).run();
 });
 
 var rootNode = new StatusNode();
@@ -300,10 +402,27 @@ rootTest.addListener("status", function(status) {
     update(rootNode, status.path.slice(0), status);
 });
 
+rootTest.addListener("finished", function () {
+    var sb = new StringBuffer();
+    render(sb, rootNode, 0);
+    process.stdout.write(sb.toString());
+});
+
 rootTest.run();
 
-var sb = new StringBuffer();
-
-render(sb, rootNode, 0);
-
-process.stdout.write(sb.toString());
+// Notes -- 
+//
+// Need to make a decision on when a parent test sends its results.
+//
+// Only when all children have finished?
+// Only when all children have failed?
+// When just a single child has failed?
+// When all the children have passed.
+//
+// Makes most sense to send the pass / fail signal when all the sub test status have
+// been recieved.
+//
+// Could there be a separate finished signal?
+//
+// Status and finished signals.
+// That makes a little sense.
