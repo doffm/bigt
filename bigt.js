@@ -290,7 +290,8 @@ Test.prototype.async = function (timeout) {
 };
 
 Test.prototype.skip = function () {
-    return this;
+    this.func = function () {};
+    return this.run();
 };
 
 var InnerTest = function (test) {
@@ -394,6 +395,9 @@ var rootTest = new Test("Root Test", function(T) {
     T.child("S6", function(T) {
         assert.ok(true);
     }).async(20).run();
+    T.child("S7", function(T) {
+        assert.ok(false);
+    }).skip();
 });
 
 var rootNode = new StatusNode();
