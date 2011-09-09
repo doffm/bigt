@@ -238,13 +238,6 @@ render(sb, root, 0);
 
 process.stdout.write(sb.toString());
 
-var facade = function (dest, source, properties) {
-    properties.forEach(function (prop) {
-        if (source[prop]) {
-            dest[prop] = typeof source[prop] == "function" ? source[prop].bind(source) : source[prop];
-        };
-    });
-};
 
 var isEmpty = function (obj) {
     var empty = true;
@@ -269,18 +262,18 @@ var isEmpty = function (obj) {
 //
 // Failed emitted on exception or through explicit `fail` method.
 
-var Test = function (name, func) {
+var Test = function (name, tfunc) {
     EventEmitter.call(this);
 
     this.name    = name;
-    this.func    = func;
+    this.tfunc    = tfunc;
     this.timeout = 0;
 };
 sys.inherits(Test, EventEmitter);
 
-Test.prototype.run = function () {
+Test.prototype.run = function (tfunc) {
     var innerTest = new InnerTest(this);
-    innerTest.run();
+    innerTest.run(tfunc);
     return this;
 };
 
@@ -290,7 +283,7 @@ Test.prototype.async = function (timeout) {
 };
 
 Test.prototype.skip = function () {
-    this.func = function () {};
+    this.tfunc = function () {};
     return this.run();
 };
 
@@ -305,7 +298,7 @@ var InnerTest = function (test) {
     this.childCounter = 0;
 };
 
-InnerTest.prototype.run = function () {
+InnerTest.prototype.run = function (tfunc) {
     var timeout = this.test.timeout;
     try {
         if (timeout && timeout > 0) {
@@ -315,7 +308,8 @@ InnerTest.prototype.run = function () {
         };
         this.emit("status", {name:this.test.name, path: [], status: "running"});
         // Run the actual test function
-        this.test.func(this);
+        var actual = tfunc ? tfunc : this.test.tfunc;
+        actual(this);
         if (!timeout) {
             this.pass();
         };
@@ -349,8 +343,8 @@ InnerTest.prototype.fail = function (error) {
     this.finish();
 };
 
-InnerTest.prototype.child = function (name, func) {
-    var child = new Test(name, func);
+InnerTest.prototype.child = function (name, tfunc) {
+    var child = new Test(name, tfunc);
     var childId = this.childCounter++;
 
     this.children[childId] = child;
@@ -369,6 +363,58 @@ InnerTest.prototype.child = function (name, func) {
     }).bind(this));
 
     return child;
+};
+
+var facade = function (dest, source, properties) {
+    properties.forEach(function (prop) {
+        if (source[prop]) {
+            dest[prop] = typeof source[prop] == "function" ? source[prop].bind(source) : source[prop];
+        };
+    });
+};
+
+var TestWrapper = function (test) {
+    var tw = function () {
+        test.run(function (innerTest) {
+            test.tfunc(InnerTestWrapper(innerTest));
+        });
+        return tw;
+    };
+
+    // Create an EventEmitter facade
+    ["addListener",
+     "on",
+     "once",
+     "removeListener",
+     "removeAllListeners",
+     "listeners",
+     "setMaxListeners"].forEach(function (prop) {
+        tw[prop] = typeof test[prop] == "function" ? test[prop].bind(test) : test[prop];
+    });
+
+    // Raise the API of Test to TestWrapper
+    ["async", "skip"].forEach(function (prop) {
+        tw[prop] = function () {
+            return TestWrapper(test[prop].apply(test, arguments));
+        };
+    });
+
+    return tw;
+};
+
+var InnerTestWrapper = function (innerTest) {
+    var itw = function (name, tfunc) {
+        return TestWrapper(innerTest.child(name, tfunc));
+    };
+
+    // Create an InnerTest facade
+    ["pass", "fail"].forEach(function (prop) {
+        itw[prop] = function () {
+            innerTest[prop].apply(innerTest, arguments);
+        };
+    });
+
+    return itw;
 };
 
 var rootTest = new Test("Root Test", function(T) {
@@ -413,6 +459,46 @@ rootTest.addListener("finished", function () {
 });
 
 rootTest.run();
+
+var wrappedRootTest = TestWrapper(new Test("Wrapped Root Test", function (T) {
+    assert.ok(true);
+    T("S1", function(T) {
+        assert.ok(true);
+    })();
+    T("S2", function(T) {
+        assert.ok(true);
+        T("S21", function(T) {
+            assert.ok(true);
+        })();
+    })();
+    T("S3", function(T) {
+        assert.ok(false);
+    })();
+    T("S4", function(T) {
+        assert.ok(true);
+        T.pass();
+    }).async()();
+    T("S5", function(T) {
+        T.fail(new Error("Foobar"));
+    })();
+    T("S6", function(T) {
+        assert.ok(true);
+    }).async(20)();
+    T("S7", function(T) {
+        assert.ok(false);
+    }).skip();
+}));
+
+var wrappedRootNode = new StatusNode();
+wrappedRootTest.addListener("status", function(status) {
+    update(wrappedRootNode, status.path.slice(0), status);
+});
+wrappedRootTest.addListener("finished", function () {
+    var sb = new StringBuffer();
+    render(sb, wrappedRootNode, 0);
+    process.stdout.write(sb.toString());
+});
+wrappedRootTest();
 
 // Notes -- 
 //
