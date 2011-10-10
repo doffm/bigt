@@ -1,4 +1,4 @@
-var sys     = require("sys");
+var util    = require("util");
 var assert  = require("assert");
 var timers  = require("timers");
 
@@ -220,7 +220,8 @@ var render = function(output, node, depth) {
     lout(output, node.name, depth, color(node.status));
 
     if(node.status == "failed" && node.error) {
-        node.error.stack.split(/\r\n|\r|\n/).forEach(function(l) {
+        var message = node.error.stack || node.error.message;
+        message.split(/\r\n|\r|\n/).forEach(function(l) {
             lines += 1;
             lout(output, l, depth, 37)
         });
@@ -237,7 +238,6 @@ var sb = new StringBuffer();
 render(sb, root, 0);
 
 process.stdout.write(sb.toString());
-
 
 var isEmpty = function (obj) {
     var empty = true;
@@ -262,14 +262,40 @@ var isEmpty = function (obj) {
 //
 // Failed emitted on exception or through explicit `fail` method.
 
+var Assert = function (test) {
+    this.test = test;
+};
+
+var assertProps = [];
+for (prop in assert) {
+  assertProps.push(prop);
+};
+
+// Create a facade assert API on the Test object
+assertProps.forEach(function (prop) {
+    var assertFunc = assert[prop];
+    Assert.prototype[prop] = function () {
+        var realArgs = arguments;
+        var assertFunc = assert[prop];
+
+        this.test.tfunc = function () {
+            assertFunc.apply(this, realArgs);
+        };
+
+        return this.test.run();
+    };
+});
+
 var Test = function (name, tfunc) {
     EventEmitter.call(this);
 
     this.name    = name;
     this.tfunc    = tfunc;
     this.timeout = 0;
+
+    this.assert = new Assert(this);
 };
-sys.inherits(Test, EventEmitter);
+util.inherits(Test, EventEmitter);
 
 Test.prototype.run = function (tfunc) {
     var innerTest = new InnerTest(this);
@@ -348,10 +374,10 @@ InnerTest.prototype.child = function (name, tfunc) {
     var childId = this.childCounter++;
 
     this.children[childId] = child;
-        
+
     child.addListener("status", (function(status) {
         // Emit the childs status
-        status.path.push(childId);
+        status.path.unshift(childId);
         this.emit("status", status);
     }).bind(this));
 
@@ -363,14 +389,6 @@ InnerTest.prototype.child = function (name, tfunc) {
     }).bind(this));
 
     return child;
-};
-
-var facade = function (dest, source, properties) {
-    properties.forEach(function (prop) {
-        if (source[prop]) {
-            dest[prop] = typeof source[prop] == "function" ? source[prop].bind(source) : source[prop];
-        };
-    });
 };
 
 var TestWrapper = function (test) {
@@ -396,6 +414,15 @@ var TestWrapper = function (test) {
     ["async", "skip"].forEach(function (prop) {
         tw[prop] = function () {
             return TestWrapper(test[prop].apply(test, arguments));
+        };
+    });
+
+    // Raise the API of assert to TestWrapper
+    tw.assert = {};
+    assertProps.forEach(function (prop) {
+        var assertFunc = test.assert[prop];
+        tw.assert[prop] = function () {
+            return TestWrapper(assertFunc.apply(test.assert, arguments));
         };
     });
 
@@ -444,6 +471,11 @@ var rootTest = new Test("Root Test", function(T) {
     T.child("S7", function(T) {
         assert.ok(false);
     }).skip();
+    T.child("S8", function(T) {
+        T.child("S81").assert.ok(true);
+        T.child("S82").assert.equal(true, true);
+        T.child("S83").assert.equal(true, false);
+    }).run();
 });
 
 var rootNode = new StatusNode();
@@ -487,6 +519,11 @@ var wrappedRootTest = TestWrapper(new Test("Wrapped Root Test", function (T) {
     T("S7", function(T) {
         assert.ok(false);
     }).skip();
+    T("S8", function(T) {
+        T("S81").assert.ok(true);
+        T("S82").assert.equal(true, true);
+        T("S83").assert.equal(true, false);
+    })();
 }));
 
 var wrappedRootNode = new StatusNode();
@@ -500,7 +537,7 @@ wrappedRootTest.addListener("finished", function () {
 });
 wrappedRootTest();
 
-// Notes -- 
+// Notes --
 //
 // Need to make a decision on when a parent test sends its results.
 //
