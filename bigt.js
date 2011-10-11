@@ -1,16 +1,15 @@
 var util    = require("util");
 var assert  = require("assert");
 var timers  = require("timers");
+var console = require("console");
 
 var EventEmitter = require("events").EventEmitter;
 
-var console = require("console");
-
 var merge = function (dest, source) {
     for (var p in source) {
-		dest[p] = source[p];
+        dest[p] = source[p];
     };
-	return dest;
+    return dest;
 }
 
 var StatusSignal = function() {
@@ -31,222 +30,9 @@ var StatusNode = function() {
     // Status of child tests
     this.children = [];
 };
+module.exports.StatusNode = StatusNode;
 
-var update = function(node, path, status) {
-    if (path.length == 0) {
-        // If refering to the current node
-        merge(node, status);
-    } else {
-        // If referring to a descendant node
-        var pathIndex = path.shift();
-
-        var i=0;
-        for (; i<node.children.length; i++) {
-            if (node.children[i].index >= pathIndex)
-                break;
-        }
-
-        if (node.children[i] && node.children[i].index == pathIndex) {
-            // If a matching node was found
-            update(node.children[i], path, status);
-        } else {
-            // Create a new desendant node, insert and update it
-            node.children.splice(i, 0, update(merge(new StatusNode, {index: pathIndex}), path, status));
-        }
-    }
-
-    return node;
-};
-
-var root = new StatusNode();
-
-update(root, [],{
-    name: "root",
-    path: [],
-    status: "running",
-    error: null
-});
-assert.deepEqual(root, {
-    name: "root",
-    path: [],
-    status: "running",
-    error: null,
-    index: 0,
-    children: []
-});
-
-update(root, [1], {
-    name: "child-1",
-    path: [1],
-    status: "running",
-    error: null
-});
-assert.deepEqual(root, {
-    name: "root",
-    path: [],
-    status: "running",
-    error: null,
-    index: 0,
-    children: [{
-        name: "child-1",
-        path: [1],
-        status: "running",
-        error: null,
-        index: 1,
-        children: []
-    }]
-});
-
-update(root, [1], {
-    name: "child-1",
-    path: [1],
-    status: "passed",
-    error: null
-});
-assert.deepEqual(root, {
-    name: "root",
-    path: [],
-    status: "running",
-    error: null,
-    index: 0,
-    children: [{
-        name: "child-1",
-        path: [1],
-        status: "passed",
-        error: null,
-        index: 1,
-        children: []
-    }]
-});
-
-update(root, [3], {
-    name: "child-3",
-    path: [3],
-    status: "failed",
-    error: null
-});
-assert.deepEqual(root, {
-    name: "root",
-    path: [],
-    status: "running",
-    error: null,
-    index: 0,
-    children: [{
-        name: "child-1",
-        path: [1],
-        status: "passed",
-        error: null,
-        index: 1,
-        children: []
-    },
-    {
-        name: "child-3",
-        path: [3],
-        status: "failed",
-        error: null,
-        index: 3,
-        children: []
-    }]
-});
-
-update(root, [2], {
-    name: "child-2",
-    path: [2],
-    status: "failed",
-    error: null
-});
-assert.deepEqual(root, {
-    name: "root",
-    path: [],
-    status: "running",
-    error: null,
-    index: 0,
-    children: [{
-        name: "child-1",
-        path: [1],
-        status: "passed",
-        error: null,
-        index: 1,
-        children: []
-    },
-    {
-        name: "child-2",
-        path: [2],
-        status: "failed",
-        error: null,
-        index: 2,
-        children: []
-    },
-    {
-        name: "child-3",
-        path: [3],
-        status: "failed",
-        error: null,
-        index: 3,
-        children: []
-    }]
-});
-
-var clear = function() {
-    process.stdout.write("\033[1A");
-};
-
-var StringBuffer = function() {
-    this.buffer = [];
-};
-StringBuffer.prototype.write = function(s) {
-    this.buffer.push(s);
-};
-StringBuffer.prototype.toString = function() {
-    return this.buffer.join("");
-};
-
-var color = function(status) {
-    switch (status) {
-        case "running": return "33";
-        case "passed" : return "1;32";
-        case "failed" : return "1;31";
-        default       : return "31";
-    };
-};
-
-var lout = function(output, line, depth, color) {
-    output.write(Array(depth+1).join("\t") + "\033[2K\033[" + color + "m" + line + "\n\033[37m");
-};
-
-
-var render = function(output, node, depth) {
-    var lines = 1;
-    lout(output, node.name, depth, color(node.status));
-
-    if(node.status == "failed" && node.error) {
-        var message = node.error.stack || node.error.message;
-        message.split(/\r\n|\r|\n/).forEach(function(l) {
-            lines += 1;
-            lout(output, l, depth, 37)
-        });
-    }
-    node.children.forEach(function(c) {
-        lines += render(output, c, depth+1)
-    });
-
-    return lines;
-};
-
-var sb = new StringBuffer();
-
-render(sb, root, 0);
-
-process.stdout.write(sb.toString());
-
-var isEmpty = function (obj) {
-    var empty = true;
-    for (prop in obj) {
-        empty = false;
-        break;
-    }
-    return empty;
-}
+// TEST OBJECT
 
 // Logic behind signal emission.
 //
@@ -261,6 +47,16 @@ var isEmpty = function (obj) {
 // Running emitted when started.
 //
 // Failed emitted on exception or through explicit `fail` method.
+
+var isEmpty = function (obj) {
+    var empty = true;
+    for (prop in obj) {
+        empty = false;
+        break;
+    }
+    return empty;
+}
+
 
 var Assert = function (test) {
     this.test = test;
@@ -296,6 +92,7 @@ var Test = function (name, tfunc) {
     this.assert = new Assert(this);
 };
 util.inherits(Test, EventEmitter);
+module.exports.Test = Test;
 
 Test.prototype.run = function (tfunc) {
     var innerTest = new InnerTest(this);
@@ -391,6 +188,8 @@ InnerTest.prototype.child = function (name, tfunc) {
     return child;
 };
 
+// TEST WRAPPER OBJECT
+
 var TestWrapper = function (test) {
     var tw = function () {
         test.run(function (innerTest) {
@@ -428,6 +227,7 @@ var TestWrapper = function (test) {
 
     return tw;
 };
+module.exports.TestWrapper = TestWrapper;
 
 var InnerTestWrapper = function (innerTest) {
     var itw = function (name, tfunc) {
@@ -444,112 +244,81 @@ var InnerTestWrapper = function (innerTest) {
     return itw;
 };
 
-var rootTest = new Test("Root Test", function(T) {
-    assert.ok(true);
-    T.child("S1", function(T) {
-        assert.ok(true);
-    }).run();
-    T.child("S2", function(T) {
-        assert.ok(true);
-        T.child("S21", function(T) {
-            assert.ok(true);
-        }).run();
-    }).run();
-    T.child("S3", function(T) {
-        assert.ok(false);
-    }).run();
-    T.child("S4", function(T) {
-        assert.ok(true);
-        T.pass();
-    }).async().run();
-    T.child("S5", function(T) {
-        T.fail(new Error("Foobar"));
-    }).run();
-    T.child("S6", function(T) {
-        assert.ok(true);
-    }).async(20).run();
-    T.child("S7", function(T) {
-        assert.ok(false);
-    }).skip();
-    T.child("S8", function(T) {
-        T.child("S81").assert.ok(true);
-        T.child("S82").assert.equal(true, true);
-        T.child("S83").assert.equal(true, false);
-    }).run();
-});
+// RESULTS AGGREGATOR
 
-var rootNode = new StatusNode();
+var update = function(node, path, status) {
+    if (path.length == 0) {
+        // If refering to the current node
+        merge(node, status);
+    } else {
+        // If referring to a descendant node
+        var pathIndex = path.shift();
 
-rootTest.addListener("status", function(status) {
-    update(rootNode, status.path.slice(0), status);
-});
+        var i=0;
+        for (; i<node.children.length; i++) {
+            if (node.children[i].index >= pathIndex)
+                break;
+        }
 
-rootTest.addListener("finished", function () {
-    var sb = new StringBuffer();
-    render(sb, rootNode, 0);
-    process.stdout.write(sb.toString());
-});
+        if (node.children[i] && node.children[i].index == pathIndex) {
+            // If a matching node was found
+            update(node.children[i], path, status);
+        } else {
+            // Create a new desendant node, insert and update it
+            node.children.splice(i, 0, update(merge(new StatusNode, {index: pathIndex}), path, status));
+        }
+    }
 
-rootTest.run();
+    return node;
+};
+module.exports.update = update;
 
-var wrappedRootTest = TestWrapper(new Test("Wrapped Root Test", function (T) {
-    assert.ok(true);
-    T("S1", function(T) {
-        assert.ok(true);
-    })();
-    T("S2", function(T) {
-        assert.ok(true);
-        T("S21", function(T) {
-            assert.ok(true);
-        })();
-    })();
-    T("S3", function(T) {
-        assert.ok(false);
-    })();
-    T("S4", function(T) {
-        assert.ok(true);
-        T.pass();
-    }).async()();
-    T("S5", function(T) {
-        T.fail(new Error("Foobar"));
-    })();
-    T("S6", function(T) {
-        assert.ok(true);
-    }).async(20)();
-    T("S7", function(T) {
-        assert.ok(false);
-    }).skip();
-    T("S8", function(T) {
-        T("S81").assert.ok(true);
-        T("S82").assert.equal(true, true);
-        T("S83").assert.equal(true, false);
-    })();
-}));
+// AGGREGATED RESULTS RENDERER
 
-var wrappedRootNode = new StatusNode();
-wrappedRootTest.addListener("status", function(status) {
-    update(wrappedRootNode, status.path.slice(0), status);
-});
-wrappedRootTest.addListener("finished", function () {
-    var sb = new StringBuffer();
-    render(sb, wrappedRootNode, 0);
-    process.stdout.write(sb.toString());
-});
-wrappedRootTest();
+var clear = function() {
+    process.stdout.write("\033[1A");
+};
 
-// Notes --
-//
-// Need to make a decision on when a parent test sends its results.
-//
-// Only when all children have finished?
-// Only when all children have failed?
-// When just a single child has failed?
-// When all the children have passed.
-//
-// Makes most sense to send the pass / fail signal when all the sub test status have
-// been recieved.
-//
-// Could there be a separate finished signal?
-//
-// Status and finished signals.
-// That makes a little sense.
+var StringBuffer = function() {
+    this.buffer = [];
+};
+StringBuffer.prototype.write = function(s) {
+    this.buffer.push(s);
+};
+StringBuffer.prototype.toString = function() {
+    return this.buffer.join("");
+};
+module.exports.StringBuffer = StringBuffer;
+
+var color = function(status) {
+    switch (status) {
+        case "running": return "33";
+        case "passed" : return "1;32";
+        case "failed" : return "1;31";
+        default       : return "31";
+    };
+};
+
+var lout = function(output, line, depth, color) {
+    output.write(Array(depth+1).join("\t") + "\033[2K\033[" + color + "m" + line + "\n\033[37m");
+};
+
+
+var render = function(output, node, depth) {
+    var lines = 1;
+    lout(output, node.name, depth, color(node.status));
+
+    if(node.status == "failed" && node.error) {
+        var message = node.error.stack || node.error.message;
+        message.split(/\r\n|\r|\n/).forEach(function(l) {
+            lines += 1;
+            lout(output, l, depth, 37)
+        });
+    }
+    node.children.forEach(function(c) {
+        lines += render(output, c, depth+1)
+    });
+
+    return lines;
+};
+module.exports.render = render;
