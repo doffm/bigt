@@ -5,48 +5,7 @@ var console = require("console");
 
 var EventEmitter = require("events").EventEmitter;
 
-var merge = function (dest, source) {
-    for (var p in source) {
-        dest[p] = source[p];
-    };
-    return dest;
-}
-
-var StatusSignal = function() {
-    // Name of the test.
-    this.name = "Unknown";
-    // Path of the test relative to its parent tests
-    this.path = [];
-    // Status of the test one of `running`, `passed`, `failed`.
-    this.status = "running";
-    // If the test has failed an error object is available.
-    this.error = null;
-};
-
-var StatusNode = function() {
-    StatusSignal.call(this);
-    // Index of the test within its parent test.
-    this.index = 0;
-    // Status of child tests
-    this.children = [];
-};
-module.exports.StatusNode = StatusNode;
-
-// TEST OBJECT
-
-// Logic behind signal emission.
-//
-// A test emits running when it is started.
-// A test emits failed if it explicitly fails either through
-// a 'fail' call or through an exception in the main function.
-// A test emits passed only when it has passed and all of its
-// children have passed.
-//
-// If it passes and one of its children fails then it fails.
-//
-// Running emitted when started.
-//
-// Failed emitted on exception or through explicit `fail` method.
+var BigT = module.exports;
 
 var isEmpty = function (obj) {
     var empty = true;
@@ -57,17 +16,73 @@ var isEmpty = function (obj) {
     return empty;
 }
 
+var merge = function (dest, source) {
+    for (var p in source) {
+        dest[p] = source[p];
+    };
+    return dest;
+}
 
+/*
+ * Test Class
+ *
+ * Tests are made up of a single test function.
+ * This function is passed an `InnerTest` object on
+ * which child tests can be created.
+ */
+var Test = BigT.Test = function (name, tfunc) {
+    EventEmitter.call(this);
+
+    this.name    = name;
+    this.tfunc    = tfunc;
+    this.timeout = 0;
+
+    this.assert = new Assert(this);
+};
+util.inherits(Test, EventEmitter);
+
+/*
+ * Run the test by executing the test function.
+ */
+Test.prototype.run = function (tfunc) {
+    var innerTest = new InnerTest(this);
+    innerTest.run(tfunc);
+    return this;
+};
+
+/*
+ * Set the test as `async`. Async tests will emit the
+ * `finished` signal only when `pass` or `fail` is
+ * explicity called on the `InnerTest` object.
+ */
+Test.prototype.async = function (timeout) {
+    this.timeout = timeout;
+    return this;
+};
+
+/*
+ * Skip the test, when run the test will pass immidiately
+ * and the test function will never be called.
+ */
+Test.prototype.skip = function () {
+    this.tfunc = function () {};
+    return this.run();
+};
+
+/*
+ * Test assert module
+ *
+ * Wraps the node assert module API.
+ */
 var Assert = function (test) {
     this.test = test;
 };
 
 var assertProps = [];
 for (prop in assert) {
-  assertProps.push(prop);
+    assertProps.push(prop);
 };
 
-// Create a facade assert API on the Test object
 assertProps.forEach(function (prop) {
     var assertFunc = assert[prop];
     Assert.prototype[prop] = function () {
@@ -82,34 +97,15 @@ assertProps.forEach(function (prop) {
     };
 });
 
-var Test = function (name, tfunc) {
-    EventEmitter.call(this);
-
-    this.name    = name;
-    this.tfunc    = tfunc;
-    this.timeout = 0;
-
-    this.assert = new Assert(this);
-};
-util.inherits(Test, EventEmitter);
-module.exports.Test = Test;
-
-Test.prototype.run = function (tfunc) {
-    var innerTest = new InnerTest(this);
-    innerTest.run(tfunc);
-    return this;
-};
-
-Test.prototype.async = function (timeout) {
-    this.timeout = timeout;
-    return this;
-};
-
-Test.prototype.skip = function () {
-    this.tfunc = function () {};
-    return this.run();
-};
-
+/*
+ * InnerTest Class
+ *
+ * InnerTest objects are passed to test functions
+ * when they are executed.
+ *
+ * They are used to create child tests and to explicity
+ * pass or fail the test.
+ */
 var InnerTest = function (test) {
     this.test = test;
     this.timeoutId = null;
@@ -153,6 +149,13 @@ InnerTest.prototype.finish = function () {
     this.finished = true;
 };
 
+/*
+ * Explicitly set the test as passed.
+ *
+ * It will emit the `status` signal, and if all of its
+ * children have finished it will also emit the `finished`
+ * signal.
+ */
 InnerTest.prototype.pass = function () {
     this.result = true;
     this.emit("status", {name: this.test.name, path: [], status: "passed"});
@@ -160,12 +163,21 @@ InnerTest.prototype.pass = function () {
         this.finish();
 };
 
+/*
+ * Explicitly fail the test.
+ *
+ * It will emit the `status` signal followed
+ * by the `finished` signal.
+ */
 InnerTest.prototype.fail = function (error) {
     this.result = true;
     this.emit("status", {name: this.test.name, path: [], status: "failed", error: error});
     this.finish();
 };
 
+/*
+ * Create a new child test.
+ */
 InnerTest.prototype.child = function (name, tfunc) {
     var child = new Test(name, tfunc);
     var childId = this.childCounter++;
@@ -188,9 +200,17 @@ InnerTest.prototype.child = function (name, tfunc) {
     return child;
 };
 
-// TEST WRAPPER OBJECT
+/*
+ * Test Wrappers
+ *
+ * The test wrappers are API sugar for the `Test` and `InnerTest` objects.
+ *
+ * They create callable objects that have the same API as `Test` and `InnerTest`.
+ * When called the `TestWrapper` object will call `run`. When called the `InnerTest`
+ * object will create a child test.
+ */
 
-var TestWrapper = function (test) {
+var TestWrapper = BigT.TestWrapper = function (test) {
     var tw = function () {
         test.run(function (innerTest) {
             test.tfunc(InnerTestWrapper(innerTest));
@@ -227,7 +247,6 @@ var TestWrapper = function (test) {
 
     return tw;
 };
-module.exports.TestWrapper = TestWrapper;
 
 var InnerTestWrapper = function (innerTest) {
     var itw = function (name, tfunc) {
@@ -244,9 +263,29 @@ var InnerTestWrapper = function (innerTest) {
     return itw;
 };
 
-// RESULTS AGGREGATOR
+/*
+ * StatusNodes are used to build a tree of test results from emitted `status`
+ * signals.
+ */
+var StatusNode = BigT.StatusNode = function() {
+    // Set some default values for the status signal properties.
+    this.name = "Unknown";
+    this.path = [];
+    this.status = "running";
+    this.error = null;
 
-var update = function(node, path, status) {
+    // Index of the test within its parent test
+    this.index = 0;
+    // Child tests
+    this.children = [];
+};
+
+/*
+ * Updates a status node using an emitted `status` signal.
+ *
+ * Builds a tree of test results from all the `status` signals.
+ */
+var updateStatusNode = BigT.updateStatusNode = function(node, path, status) {
     if (path.length == 0) {
         // If refering to the current node
         merge(node, status);
@@ -262,33 +301,15 @@ var update = function(node, path, status) {
 
         if (node.children[i] && node.children[i].index == pathIndex) {
             // If a matching node was found
-            update(node.children[i], path, status);
+            updateStatusNode(node.children[i], path, status);
         } else {
             // Create a new desendant node, insert and update it
-            node.children.splice(i, 0, update(merge(new StatusNode, {index: pathIndex}), path, status));
+            node.children.splice(i, 0, updateStatusNode(merge(new StatusNode, {index: pathIndex}), path, status));
         }
     }
 
     return node;
 };
-module.exports.update = update;
-
-// AGGREGATED RESULTS RENDERER
-
-var clear = function() {
-    process.stdout.write("\033[1A");
-};
-
-var StringBuffer = function() {
-    this.buffer = [];
-};
-StringBuffer.prototype.write = function(s) {
-    this.buffer.push(s);
-};
-StringBuffer.prototype.toString = function() {
-    return this.buffer.join("");
-};
-module.exports.StringBuffer = StringBuffer;
 
 var color = function(status) {
     switch (status) {
@@ -303,8 +324,12 @@ var lout = function(output, line, depth, color) {
     output.write(Array(depth+1).join("\t") + "\033[2K\033[" + color + "m" + line + "\n\033[37m");
 };
 
-
-var render = function(output, node, depth) {
+/*
+ * Renders a tree of test results to a stream output.
+ *
+ * Uses terminal escape codes for coloring the output.
+ */
+var renderStatusNode = BigT.renderStatusNode = function(output, node, depth) {
     var lines = 1;
     lout(output, node.name, depth, color(node.status));
 
@@ -316,9 +341,30 @@ var render = function(output, node, depth) {
         });
     }
     node.children.forEach(function(c) {
-        lines += render(output, c, depth+1)
+        lines += renderStatusNode(output, c, depth+1)
     });
 
     return lines;
 };
-module.exports.render = render;
+
+
+/*
+ * Console output.
+ *
+ * Listens to signals from a Test object and outputs
+ * results to the console as they are reported.
+ */
+
+var StringBuffer = function() {
+    this.buffer = [];
+};
+StringBuffer.prototype.write = function(s) {
+    this.buffer.push(s);
+};
+StringBuffer.prototype.toString = function() {
+    return this.buffer.join("");
+};
+
+var clear = function() {
+    process.stdout.write("\033[1A");
+};
