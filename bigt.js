@@ -217,7 +217,6 @@ var TestWrapper = BigT.TestWrapper = function (test) {
         });
         return tw;
     };
-
     // Create an EventEmitter facade
     ["addListener",
      "on",
@@ -235,6 +234,13 @@ var TestWrapper = BigT.TestWrapper = function (test) {
             return TestWrapper(test[prop].apply(test, arguments));
         };
     });
+
+    tw["run"] = function () {
+        test.run(function (innerTest) {
+            test.tfunc(InnerTestWrapper(innerTest));
+        });
+        return tw;
+    };
 
     // Raise the API of assert to TestWrapper
     tw.assert = {};
@@ -261,6 +267,13 @@ var InnerTestWrapper = function (innerTest) {
     });
 
     return itw;
+};
+
+/*
+ * Factory function for the TestWrapper class
+ */
+var T = BigT.T = function (name, tfunc) {
+    return TestWrapper(new Test(name, tfunc));
 };
 
 /*
@@ -352,7 +365,7 @@ var renderStatusNode = BigT.renderStatusNode = function(output, node, depth) {
  * Console output.
  *
  * Listens to signals from a Test object and outputs
- * results to the console as they are reported.
+ * results to the console when the tests are finished.
  */
 
 var StringBuffer = function() {
@@ -365,6 +378,16 @@ StringBuffer.prototype.toString = function() {
     return this.buffer.join("");
 };
 
-var clear = function() {
-    process.stdout.write("\033[1A");
+var ConsoleOutput = BigT.ConsoleOutput = function (test) {
+    var rootNode = new StatusNode();
+
+    test.addListener("status", function(status) {
+        updateStatusNode(rootNode, status.path.slice(0), status);
+    });
+    test.addListener("finished", function() {
+        var sb = new StringBuffer();
+        var lines = renderStatusNode(sb, rootNode, 0);
+        process.stdout.write(sb.toString());
+    });
+    test.run();
 };
