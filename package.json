@@ -1,0 +1,12 @@
+{
+    "name": "bigt"
+  , "description": "Unobtrusive testing framework"
+  , "version": "0.1.0"
+  , "author": "Mark Doffman <mark.doffman@gmail.com>"
+  , "main": "./bigt.js"
+  , "engines": { "node": ">= 0.4.0" }
+  , "repository": {
+        "type": "git"
+      , "url": "git@github.com:doffm/bigt.git"
+    }
+}
